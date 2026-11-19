@@ -53,8 +53,14 @@ async function getPaperReviews(paper) {
       questions: readField(content, /^(questions|questionsforauthors)$/),
       review: readField(content, /^(review|mainreview|detailedreview)$/)
     };
-  }).filter((item) => Object.values(item).some(Boolean))
-    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  }).map((review, index) => ({ review, noteId: notes[index].id }))
+    .filter(({ review }) => Object.values(review).some(Boolean))
+    .map(({ review, noteId }) => ({ ...review, ...(noteId ? { noteId } : {}) }))
+    .sort((left, right) => {
+      const a = left.noteId || JSON.stringify(left);
+      const b = right.noteId || JSON.stringify(right);
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
   const signature = JSON.stringify(reviews);
   return {
     ...paper,
@@ -88,6 +94,24 @@ async function openChatGPTTab(prompt, title) {
   return tab.id;
 }
 
+// Serialize only storage changes so in-flight checks cannot overwrite newly added venues.
+let paperUpdateQueue = Promise.resolve();
+function updatePapers(update, extra = {}) {
+  const task = paperUpdateQueue.then(async () => {
+    const { papers = [] } = await chrome.storage.local.get(["papers"]);
+    await chrome.storage.local.set({ papers: update(papers), ...extra });
+  });
+  paperUpdateQueue = task.catch(() => {});
+  return task;
+}
+
+function persistPaperResults(results, extra) {
+  const byForum = new Map(results.map(paper => [paper.forum, paper]));
+  return updatePapers(papers => papers.map(paper => byForum.has(paper.forum)
+    ? { ...byForum.get(paper.forum), title: paper.title, venue: paper.venue }
+    : paper), extra);
+}
+
 async function stateNow() {
   return chrome.storage.local.get(["papers", "error", "lastChecked", "aiPrompt", "aiConsent"]);
 }
@@ -105,17 +129,21 @@ async function emailBridgeRequest(path, token, body) {
       body: JSON.stringify(body)
     });
   } catch (_error) {
-    throw new Error("로컬 이메일 서비스에 연결할 수 없습니다. Python 모니터와 Chrome의 로컬 네트워크 권한을 확인하세요.");
+    throw new Error("로컬 알림 서비스에 연결할 수 없습니다. Python 모니터와 Chrome의 로컬 네트워크 권한을 확인하세요.");
   }
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result.ok) {
-    throw new Error(result.error || `이메일 서비스 오류 (${response.status})`);
+    throw new Error(result.error || `알림 서비스 오류 (${response.status})`);
   }
   return result;
 }
 
+function notificationChannel(settings) {
+  return settings.notificationChannel || (settings.emailTo ? "email" : "browser");
+}
+
 async function pollAll({ notify = true, baseline = false } = {}) {
-  const stored = await chrome.storage.local.get(["papers", "aiPrompt", "aiConsent", "emailAuto", "emailTo", "emailBridgeToken"]);
+  const stored = await chrome.storage.local.get(["papers", "aiPrompt", "aiConsent", "emailAuto", "emailTo", "emailBridgeToken", "notificationChannel"]);
   const previous = stored.papers || [];
   if (!previous.length) return { ok: false, error: "감시 중인 논문이 없습니다." };
 
@@ -125,51 +153,54 @@ async function pollAll({ notify = true, baseline = false } = {}) {
     try {
       const current = await getPaperReviews(oldPaper);
       const hasScore = Boolean(current.scores || current.confidences);
-      const changed = oldPaper.signature
-        ? oldPaper.signature !== current.signature
-        : hasScore;
-
+      const changed = oldPaper.signature ? oldPaper.signature !== current.signature : hasScore;
+      let paperError = "";
       if (notify && changed && hasScore) {
-        chrome.notifications.create(`score-${oldPaper.forum}`, {
-          type: "basic",
-          iconUrl: "icon.png",
-          title: "OpenReview 리뷰가 업데이트됐습니다",
+        await chrome.notifications.create(`score-${oldPaper.forum}`, {
+          type: "basic", iconUrl: "icon.png", title: "OpenReview 리뷰가 업데이트됐습니다",
           message: `${oldPaper.title}\n점수: ${current.scores || "—"} · Confidence: ${current.confidences || "—"}`
         });
-        if (stored.emailAuto && stored.emailTo?.trim() && stored.emailBridgeToken?.trim() && current.reviews.some((review) => review.score)) {
-          try {
-            const sent = await emailBridgeRequest("/send-now", stored.emailBridgeToken.trim(), {
-              recipient: stored.emailTo.trim(),
-              papers: [{ title: current.title, venue: current.venue, reviews: current.reviews }]
-            });
-            chrome.notifications.create(`email-${oldPaper.forum}`, {
-              type: "basic", iconUrl: "icon.png", title: "리뷰 이메일을 보냈습니다",
-              message: `${current.title}\n${stored.emailTo.trim()} · ${sent.paperCount}편`
-            });
-          } catch (error) {
-            firstError ||= error.message;
-            chrome.notifications.create(`email-error-${oldPaper.forum}`, {
-              type: "basic", iconUrl: "icon.png", title: "리뷰 이메일을 보내지 못했습니다", message: error.message
-            });
-            next.push({ ...oldPaper, error: error.message });
-            continue;
-          }
-        }
         if (stored.aiConsent && stored.aiPrompt?.trim() && current.reviews.length) {
           try {
             await openChatGPTTab(buildPrompt(stored, current, current.reviews), current.title);
           } catch (error) {
             chrome.notifications.create(`chatgpt-error-${oldPaper.forum}`, {
-              type: "basic",
-              iconUrl: "icon.png",
-              title: "ChatGPT 탭을 열지 못했습니다",
-              message: error.message
+              type: "basic", iconUrl: "icon.png", title: "ChatGPT 탭을 열지 못했습니다", message: error.message
             });
           }
         }
       }
-      const { reviews, ...persisted } = current;
-      next.push(persisted);
+      const channel = notificationChannel(stored);
+      if (notify && channel !== "browser" && stored.emailAuto && current.reviews.some((review) => review.score)) {
+        const targets = channel === "both" ? ["email", "telegram"] : [channel];
+        const notificationSignatures = { ...oldPaper.notificationSignatures };
+        for (const target of targets) {
+          if (notificationSignatures[target] === current.signature) continue;
+          try {
+            if (!stored.emailBridgeToken?.trim()) throw new Error("로컬 알림 서비스 토큰을 설정하고 저장하세요.");
+            await emailBridgeRequest("/send-now", stored.emailBridgeToken.trim(), {
+              recipient: stored.emailTo?.trim() || "",
+              notificationChannel: target,
+              papers: [{ title: current.title, venue: current.venue, forum: current.forum, reviews: current.reviews }]
+            });
+            notificationSignatures[target] = current.signature;
+            chrome.notifications.create(`delivery-${target}-${oldPaper.forum}`, {
+              type: "basic", iconUrl: "icon.png", title: "리뷰 알림을 보냈습니다", message: `${current.title} · ${target}`
+            });
+          } catch (error) {
+            paperError ||= error.message;
+          }
+        }
+        current.notificationSignatures = notificationSignatures;
+        if (paperError) {
+          firstError ||= paperError;
+          chrome.notifications.create(`delivery-error-${oldPaper.forum}`, {
+            type: "basic", iconUrl: "icon.png", title: "감시 중 · 추가 알림 전송 실패", message: paperError
+          });
+        }
+      }
+      const { reviews, error: _previousError, ...persisted } = current;
+      next.push({ ...persisted, ...(paperError ? { error: paperError } : {}) });
     } catch (error) {
       firstError ||= error.message;
       next.push({ ...oldPaper, error: error.message });
@@ -177,7 +208,7 @@ async function pollAll({ notify = true, baseline = false } = {}) {
   }
   const lastChecked = Date.now();
   const error = firstError || "";
-  await chrome.storage.local.set({ papers: next, lastChecked, error, ...(baseline ? { baselineAt: lastChecked } : {}) });
+  await persistPaperResults(next, { lastChecked, error, ...(baseline ? { baselineAt: lastChecked } : {}) });
   await chrome.alarms.create(ALARM_NAME, { periodInMinutes: INTERVAL_MINUTES });
   return { ok: !error, error, state: await stateNow() };
 }
@@ -205,15 +236,16 @@ async function sendCurrentReviewsToChatGPT() {
     }
   }
   const lastChecked = Date.now();
-  await chrome.storage.local.set({ papers: updated, lastChecked });
+  await persistPaperResults(updated, { lastChecked });
   if (!sent) return { ok: false, error: "점수와 공식 리뷰가 공개된 논문을 찾지 못했습니다.", state: await stateNow() };
   return { ok: true, message: `${sent}편의 리뷰를 새 ChatGPT 탭에 보냈습니다.`, state: await stateNow() };
 }
 
 async function sendCurrentReviewsToEmail() {
-  const stored = await chrome.storage.local.get(["papers", "emailTo", "emailBridgeToken"]);
-  if (!stored.emailTo?.trim()) return { ok: false, error: "받는 이메일 주소를 설정하고 저장하세요." };
-  if (!stored.emailBridgeToken?.trim()) return { ok: false, error: "로컬 이메일 서비스 토큰을 설정하고 저장하세요." };
+  const stored = await chrome.storage.local.get(["papers", "emailTo", "emailBridgeToken", "notificationChannel"]);
+  const channel = notificationChannel(stored);
+  if (["email", "both"].includes(channel) && !stored.emailTo?.trim()) return { ok: false, error: "받는 이메일 주소를 설정하고 저장하세요." };
+  if (channel !== "browser" && !stored.emailBridgeToken?.trim()) return { ok: false, error: "로컬 알림 서비스 토큰을 설정하고 저장하세요." };
   const papers = stored.papers || [];
   if (!papers.length) return { ok: false, error: "감시 중인 논문이 없습니다." };
 
@@ -224,6 +256,7 @@ async function sendCurrentReviewsToEmail() {
     emailPapers.push({
       title: current.title,
       venue: current.venue,
+      forum: current.forum,
       reviews: current.reviews
     });
   }
@@ -231,12 +264,23 @@ async function sendCurrentReviewsToEmail() {
     return { ok: false, error: "점수가 공개된 공식 리뷰를 찾지 못했습니다." };
   }
 
+  if (channel === "browser") {
+    for (const [index, paper] of emailPapers.entries()) {
+      await chrome.notifications.create(`manual-review-${index}`, {
+        type: "basic", iconUrl: "icon.png", title: "OpenReview 현재 리뷰",
+        message: `${paper.title}\n${paper.reviews.map((review, index) => `R${index + 1}: ${review.score || "—"} / Confidence ${review.confidence || "—"}`).join(" · ")}`
+      });
+    }
+    return { ok: true, message: `${emailPapers.length}편의 브라우저 알림을 보냈습니다.` };
+  }
+
   try {
     const sent = await emailBridgeRequest("/send-now", stored.emailBridgeToken.trim(), {
-      recipient: stored.emailTo.trim(),
+      recipient: stored.emailTo?.trim() || "",
+      notificationChannel: stored.notificationChannel || "email",
       papers: emailPapers
     });
-    return { ok: true, message: `${sent.paperCount}편의 리뷰를 ${stored.emailTo.trim()} 주소로 보냈습니다.` };
+    return { ok: true, message: `${sent.paperCount}편의 리뷰를 ${stored.notificationChannel || "email"} 방식으로 보냈습니다.` };
   } catch (error) {
     return { ok: false, error: error.message };
   }
@@ -288,7 +332,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   if (message.type === "GET_EMAIL_SETTINGS") {
-    chrome.storage.local.get(["emailTo", "emailBridgeToken", "emailAuto"]).then(sendResponse);
+    chrome.storage.local.get(["emailTo", "emailBridgeToken", "emailAuto", "notificationChannel"]).then(sendResponse);
     return true;
   }
   if (message.type === "SAVE_AI_SETTINGS") {
@@ -300,11 +344,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       const emailTo = (message.emailTo || "").trim();
       const emailBridgeToken = (message.emailBridgeToken || "").trim();
-      const emailAuto = Boolean(message.emailAuto);
-      if (!emailTo) throw new Error("받는 이메일 주소를 입력하세요.");
-      if (emailBridgeToken.length < 32) throw new Error("서비스 토큰은 32자 이상이어야 합니다.");
-      await chrome.storage.local.set({ emailTo, emailBridgeToken, emailAuto });
-      sendResponse({ ok: true, message: "받는 주소를 저장했습니다." });
+      const emailAuto = message.notificationChannel !== "browser" && Boolean(message.emailAuto);
+      const notificationChannel = message.notificationChannel || "email";
+      if (!["browser", "email", "telegram", "both"].includes(notificationChannel)) throw new Error("알림 방식을 선택하세요.");
+      if (["email", "both"].includes(notificationChannel) && !emailTo) throw new Error("받는 이메일 주소를 입력하세요.");
+      if (notificationChannel !== "browser" && emailBridgeToken.length < 32) throw new Error("서비스 토큰은 32자 이상이어야 합니다.");
+      await chrome.storage.local.set({ emailTo, emailBridgeToken, emailAuto, notificationChannel });
+      sendResponse({ ok: true, message: "알림 설정을 저장했습니다." });
     })().catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
@@ -316,15 +362,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.type === "SET_PAPERS") {
     (async () => {
-      const { papers: oldPapers = [], aiConsent = false } = await chrome.storage.local.get(["papers", "aiConsent"]);
-      const oldByForum = new Map(oldPapers.map((paper) => [paper.forum, paper]));
-      const unique = [...new Map((message.papers || []).map((paper) => {
-        const previousPaper = oldByForum.get(paper.forum);
-        return [paper.forum, previousPaper ? { ...paper, signature: previousPaper.signature } : paper];
-      })).values()];
-      await chrome.storage.local.set({ papers: unique, error: "" });
-      const result = await pollAll({ notify: true, baseline: true });
-      sendResponse(result);
+      if (!Array.isArray(message.papers) || !message.papers.length) throw new Error("등록할 논문이 없습니다.");
+      for (const paper of message.papers) {
+        if (![paper?.forum, paper?.title, paper?.venue].every(value => typeof value === "string" && value.trim())) {
+          throw new Error("논문 제목, venue, forum ID가 필요합니다.");
+        }
+      }
+      await updatePapers(oldPapers => {
+        const byForum = new Map(oldPapers.map(paper => [paper.forum, paper]));
+        for (const paper of message.papers) {
+          byForum.set(paper.forum, {
+            ...byForum.get(paper.forum), forum: paper.forum, title: paper.title, venue: paper.venue
+          });
+        }
+        return [...byForum.values()];
+      }, { error: "" });
+      await chrome.alarms.create(ALARM_NAME, { periodInMinutes: INTERVAL_MINUTES });
+      sendResponse({ ok: true, state: await stateNow() });
+      // Registration is complete; notification delivery cannot block its response.
+      await pollAll({ notify: true, baseline: true }).catch((error) => chrome.storage.local.set({ error: error.message }));
     })().catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }

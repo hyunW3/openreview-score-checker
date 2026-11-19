@@ -1,4 +1,4 @@
-"""Email changed official OpenReview reviews without calling an AI service."""
+"""Send email or Telegram notifications about changed OpenReview reviews."""
 from __future__ import annotations
 
 import hashlib
@@ -15,7 +15,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
 import openreview
 
@@ -31,6 +33,39 @@ REVIEW_FIELDS = ("score", "confidence", "summary", "strengths", "weaknesses", "q
 
 class OpenReviewAuthenticationError(RuntimeError):
     """Raised when the OpenReview login needs to be renewed."""
+
+
+class NotificationError(RuntimeError):
+    """A safe, user-facing notification delivery error."""
+
+
+def required_setting(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise NotificationError(f"Missing environment variable: {name}")
+    return value
+
+
+def notification_settings() -> dict[str, Any]:
+    if EMAIL_SETTINGS_PATH.exists():
+        return json.loads(EMAIL_SETTINGS_PATH.read_text(encoding="utf-8"))
+    return {}
+
+
+def validate_channel(value: Any) -> str:
+    if not isinstance(value, str) or value not in ("browser", "email", "telegram", "both"):
+        raise ValueError("Notification channel must be browser, email, telegram, or both")
+    return value
+
+
+def notification_channel() -> str:
+    return validate_channel(notification_settings().get("notificationChannel", os.getenv("NOTIFICATION_CHANNEL", "email")))
+
+
+def delivery_channels(channel: str) -> tuple[str, ...]:
+    if channel == "browser":
+        return ()
+    return ("email", "telegram") if channel == "both" else (channel,)
 
 
 def value_of(value: Any) -> str:
@@ -109,8 +144,10 @@ def official_reviews(client: Any, forum: str) -> list[dict[str, str]]:
             "review": field(content, {"review", "mainreview", "detailedreview"}),
         }
         if any(review.values()):
+            if note.get("id"):
+                review["noteId"] = note["id"]
             extracted.append({key: value for key, value in review.items() if value})
-    return extracted
+    return sorted(extracted, key=lambda review: review.get("noteId") or json.dumps(review, sort_keys=True))
 
 
 def email_recipient() -> str:
@@ -134,43 +171,48 @@ def validate_email_recipient(value: Any) -> str:
 
 
 def review_text(paper: dict[str, Any], reviews: list[dict[str, str]]) -> str:
-    review_sections = []
-    field_labels = [
-        ("Score", "score"),
-        ("Confidence", "confidence"),
-        ("Summary", "summary"),
-        ("Strengths", "strengths"),
-        ("Weaknesses", "weaknesses"),
-        ("Questions", "questions"),
-        ("Review", "review"),
-    ]
-    for index, review in enumerate(reviews, start=1):
-        content = "\n\n".join(
-            f"{label}:\n{review[key]}" for label, key in field_labels if review.get(key)
-        )
-        review_sections.append(f"Review {index}\n{'-' * 40}\n{content}")
-    return (
-        f"Venue: {paper['venue']}\n"
-        f"Paper: {paper['title']}\n\n"
-        "Official reviews and scores:\n\n"
-        + "\n\n".join(review_sections)
-        + "\n\nSent directly from OpenReview. No AI service was called."
-    )
+    return notification_text([{**paper, "reviews": reviews}])
+
+
+def notification_text(papers: list[dict[str, Any]]) -> str:
+    summaries = ["Scores / Confidence"]
+    links = ["Full reviews on OpenReview"]
+    for paper in papers:
+        heading = f"{paper['title']}\nVenue: {paper['venue']}"
+        summaries.append(heading)
+        links.append(paper["title"])
+        forum = paper.get("forum", "")
+        if forum:
+            links.append("Paper: https://openreview.net/forum?" + urlencode({"id": forum}))
+        for index, review in enumerate(paper["reviews"], start=1):
+            label = f"Review {index}"
+            summaries.append(f"{label}: Score {review.get('score') or '—'} | Confidence {review.get('confidence') or '—'}")
+            if forum and review.get("noteId"):
+                links.append(f"{label}: https://openreview.net/forum?" + urlencode({"id": forum, "noteId": review["noteId"]}))
+            elif forum:
+                links.append(f"{label}: see paper link above")
+            else:
+                links.append(f"{label}: link unavailable; reload the extension and resend")
+        summaries.append("")
+        links.append("")
+    return "\n".join(summaries + links).rstrip() + "\n\nFull review text, including weaknesses, is available at the links above (OpenReview login may be required)."
 
 
 def send_message(message: EmailMessage) -> None:
-    host = os.environ["SMTP_HOST"]
+    host = required_setting("SMTP_HOST")
+    username = required_setting("SMTP_USERNAME")
+    password = required_setting("SMTP_PASSWORD")
     port = int(os.getenv("SMTP_PORT") or "587")
     with smtplib.SMTP(host, port, timeout=30) as smtp:
         smtp.starttls(context=ssl.create_default_context())
-        smtp.login(os.environ["SMTP_USERNAME"], os.environ["SMTP_PASSWORD"])
+        smtp.login(username, password)
         smtp.send_message(message)
 
 
 def send_email(paper: dict[str, str], reviews: list[dict[str, str]], recipient: str | None = None) -> None:
     message = EmailMessage()
     message["Subject"] = f"[OpenReview] {paper['title']} — review update"
-    message["From"] = os.environ["EMAIL_FROM"]
+    message["From"] = required_setting("EMAIL_FROM")
     message["To"] = validate_email_recipient(recipient) if recipient else email_recipient()
     message.set_content(review_text(paper, reviews))
     send_message(message)
@@ -179,10 +221,70 @@ def send_email(paper: dict[str, str], reviews: list[dict[str, str]], recipient: 
 def send_email_batch(papers: list[dict[str, Any]], recipient: str) -> None:
     message = EmailMessage()
     message["Subject"] = "[OpenReview] Current review scores and reviews"
-    message["From"] = os.environ["EMAIL_FROM"]
+    message["From"] = required_setting("EMAIL_FROM")
     message["To"] = validate_email_recipient(recipient)
-    message.set_content("\n\n".join(review_text(paper, paper["reviews"]) for paper in papers))
+    message.set_content(notification_text(papers))
     send_message(message)
+
+
+def telegram_chunks(text: str) -> list[str]:
+    # Count UTF-16 units conservatively, including emoji, below Telegram's limit.
+    chunks: list[str] = []
+    current: list[str] = []
+    units = 0
+    for char in text:
+        size = 2 if ord(char) > 0xFFFF else 1
+        if units + size > 4000:
+            chunks.append("".join(current))
+            current, units = [], 0
+        current.append(char)
+        units += size
+    if current:
+        chunks.append("".join(current))
+    return chunks
+
+
+def send_telegram_batch(papers: list[dict[str, Any]]) -> None:
+    token = required_setting("TELEGRAM_BOT_TOKEN")
+    chat_id = required_setting("TELEGRAM_CHAT_ID")
+    text = "[OpenReview] Review update\n\n" + notification_text(papers)
+    for index, chunk in enumerate(telegram_chunks(text)):
+        if index:
+            time.sleep(1.1)
+        request = Request(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data=json.dumps({"chat_id": chat_id, "text": chunk}).encode("utf-8"),
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                result = json.load(response)
+        except HTTPError as error:
+            raise NotificationError(f"Telegram API error (HTTP {error.code}); check bot token, chat ID and bot permissions") from None
+        except (URLError, TimeoutError, OSError):
+            raise NotificationError("Cannot connect to Telegram API") from None
+        except (ValueError, UnicodeError):
+            raise NotificationError("Invalid response from Telegram API") from None
+        if not isinstance(result, dict) or not result.get("ok"):
+            raise NotificationError("Telegram rejected the message; check bot token, chat ID and bot permissions")
+
+
+def send_notification_batch(papers: list[dict[str, Any]], recipient: str, channel: str) -> None:
+    failures = []
+    sent = []
+    for target in delivery_channels(validate_channel(channel)):
+        try:
+            if target == "email":
+                send_email_batch(papers, recipient)
+            else:
+                send_telegram_batch(papers)
+            sent.append(target)
+        except Exception as error:
+            detail = str(error) if isinstance(error, NotificationError) else type(error).__name__
+            failures.append(f"{target}: {detail}")
+    if failures:
+        delivered = f"Already sent via {', '.join(sent)}. " if sent else ""
+        raise NotificationError(delivered + "; ".join(failures))
 
 
 def load_state() -> dict[str, str]:
@@ -209,13 +311,21 @@ def check_once(client: Any, papers: list[dict[str, str]], state: dict[str, str])
             fingerprint = hashlib.sha256(
                 json.dumps(reviews, sort_keys=True, ensure_ascii=False).encode("utf-8")
             ).hexdigest()
-            if state.get(key) == fingerprint:
-                continue
-
-            send_email(paper, reviews)
-            state[key] = fingerprint
-            save_state(state)
-            print(f"Sent review update for {paper['title']}.")
+            channel = notification_channel()
+            for target in delivery_channels(channel):
+                delivery_key = f"{key}:{target}"
+                # Preserve existing email fingerprints from older versions.
+                previous = state.get(delivery_key, state.get(key) if target == "email" else None)
+                if previous == fingerprint:
+                    continue
+                try:
+                    recipient = email_recipient() if target == "email" else ""
+                    send_notification_batch([{**paper, "reviews": reviews}], recipient, target)
+                    state[delivery_key] = fingerprint
+                    save_state(state)
+                    print(f"Sent review update via {target} for {paper['title']}.")
+                except Exception as error:
+                    failures.append(f"{paper['title']}: {error}" if isinstance(error, NotificationError) else f"{paper['title']}: {target}: {type(error).__name__}")
         except OpenReviewAuthenticationError:
             raise
         except Exception as error:  # Keep other configured papers moving.
@@ -230,20 +340,22 @@ def is_extension_origin(origin: str) -> bool:
     return parsed.scheme == "chrome-extension" and bool(parsed.netloc) and not parsed.path
 
 
-def save_email_settings(email_to: str, email_auto: bool = False) -> None:
-    recipient = validate_email_recipient(email_to)
+def save_email_settings(email_to: str, email_auto: bool = False, channel: str = "email") -> None:
+    channel = validate_channel(channel)
+    recipient = validate_email_recipient(email_to) if channel in ("email", "both") else ""
     EMAIL_SETTINGS_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = EMAIL_SETTINGS_PATH.with_suffix(".tmp")
-    temporary.write_text(json.dumps({"emailTo": recipient, "emailAuto": bool(email_auto)}), encoding="utf-8")
+    temporary.write_text(json.dumps({"emailTo": recipient, "emailAuto": bool(email_auto), "notificationChannel": channel}), encoding="utf-8")
     os.chmod(temporary, 0o600)
     temporary.replace(EMAIL_SETTINGS_PATH)
     os.chmod(EMAIL_SETTINGS_PATH.parent, 0o700)
 
 
-def validate_email_request(payload: Any) -> tuple[str, list[dict[str, Any]]]:
+def validate_email_request(payload: Any) -> tuple[str, list[dict[str, Any]], str]:
     if not isinstance(payload, dict):
         raise ValueError("Invalid email request")
-    recipient = validate_email_recipient(payload.get("recipient", ""))
+    channel = validate_channel(payload.get("notificationChannel", "email"))
+    recipient = validate_email_recipient(payload.get("recipient", "")) if channel in ("email", "both") else ""
     papers = payload.get("papers")
     if not isinstance(papers, list) or not papers or len(papers) > 50:
         raise ValueError("Select at least one monitored paper")
@@ -258,6 +370,9 @@ def validate_email_request(payload: Any) -> tuple[str, list[dict[str, Any]]]:
             raise ValueError("Invalid paper title")
         if not isinstance(venue, str) or not venue.strip() or len(venue) > 500:
             raise ValueError("Invalid venue")
+        forum = paper.get("forum", "")
+        if not isinstance(forum, str) or len(forum) > 500 or any(char.isspace() for char in forum):
+            raise ValueError("Invalid paper forum ID")
         if not isinstance(reviews, list) or not reviews or len(reviews) > 100:
             raise ValueError("No official reviews with scores were found")
         safe_reviews = []
@@ -272,17 +387,22 @@ def validate_email_request(payload: Any) -> tuple[str, list[dict[str, Any]]]:
                         raise ValueError("Invalid review field")
                     safe_review[key] = value
             if safe_review:
+                note_id = review.get("noteId", "")
+                if not isinstance(note_id, str) or len(note_id) > 500 or any(char.isspace() for char in note_id):
+                    raise ValueError("Invalid review note ID")
+                if note_id:
+                    safe_review["noteId"] = note_id
                 safe_reviews.append(safe_review)
         if not safe_reviews:
             raise ValueError("No review content was found")
-        prepared.append({"title": title.strip(), "venue": venue.strip(), "reviews": safe_reviews})
-    return recipient, prepared
+        prepared.append({"title": title.strip(), "venue": venue.strip(), "forum": forum, "reviews": safe_reviews})
+    return recipient, prepared, channel
 
 
 def start_email_bridge() -> ThreadingHTTPServer | None:
     token = os.getenv("EMAIL_BRIDGE_TOKEN", "").strip()
     if len(token) < 32:
-        print("Email extension bridge disabled: EMAIL_BRIDGE_TOKEN must be at least 32 characters.", file=sys.stderr)
+        print("Notification extension bridge disabled: EMAIL_BRIDGE_TOKEN must be at least 32 characters.", file=sys.stderr)
         return None
     port = DEFAULT_EMAIL_BRIDGE_PORT
 
@@ -346,23 +466,25 @@ def start_email_bridge() -> ThreadingHTTPServer | None:
                         raise ValueError("Invalid email settings")
                     if "emailAuto" in payload and not isinstance(payload["emailAuto"], bool):
                         raise ValueError("Invalid automatic email setting")
-                    save_email_settings(payload.get("emailTo", ""), payload.get("emailAuto", False))
+                    save_email_settings(payload.get("emailTo", ""), payload.get("emailAuto", False), payload.get("notificationChannel", "email"))
                     self.send_json(200, {"ok": True})
                     return
                 if self.path != "/send-now":
                     self.send_json(404, {"ok": False, "error": "Not found"})
                     return
-                recipient, papers = validate_email_request(payload)
-                send_email_batch(papers, recipient)
+                recipient, papers, channel = validate_email_request(payload)
+                send_notification_batch(papers, recipient, channel)
                 self.send_json(200, {"ok": True, "paperCount": len(papers)})
+            except NotificationError as error:
+                self.send_json(502, {"ok": False, "error": str(error)})
             except (ValueError, json.JSONDecodeError) as error:
                 self.send_json(400, {"ok": False, "error": str(error)})
             except Exception as error:
-                self.send_json(502, {"ok": False, "error": f"Email send failed ({type(error).__name__})"})
+                self.send_json(502, {"ok": False, "error": f"Notification send failed ({type(error).__name__})"})
 
     server = ThreadingHTTPServer(("127.0.0.1", port), EmailBridgeHandler)
     Thread(target=server.serve_forever, daemon=True).start()
-    print(f"Email extension bridge listening on 127.0.0.1:{port}.")
+    print(f"Notification extension bridge listening on 127.0.0.1:{port}.")
     return server
 
 
@@ -370,13 +492,13 @@ def main() -> None:
     try:
         bridge = start_email_bridge()
     except Exception as error:
-        print(f"Email extension bridge failed to start ({type(error).__name__}).", file=sys.stderr)
+        print(f"Notification extension bridge failed to start ({type(error).__name__}).", file=sys.stderr)
         bridge = None
 
     if not os.getenv("OPENREVIEW_PAPERS_JSON", "").strip():
         if bridge is None:
-            raise RuntimeError("Configure OPENREVIEW_PAPERS_JSON or enable the email bridge with EMAIL_BRIDGE_TOKEN")
-        print("Background OpenReview polling is not configured; the extension email bridge is active.")
+            raise RuntimeError("Configure OPENREVIEW_PAPERS_JSON or enable the notification bridge with EMAIL_BRIDGE_TOKEN")
+        print("Background OpenReview polling is not configured; the extension notification bridge is active.")
         while True:
             time.sleep(3600)
 

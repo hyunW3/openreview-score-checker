@@ -12,7 +12,7 @@ button:hover { background: #f5f7fa; }
 .email-settings, .prompt-settings { margin: 13px 0; padding: 12px; border: 1px solid #e8eaee; border-radius: 8px; background: #fbfcfd; }
 .email-settings h2 { margin: 0 0 9px; font-size: 14px; }
 .email-settings label { display: block; margin: 8px 0 4px; font-weight: 600; }
-.email-settings input { width: 100%; padding: 7px 8px; border: 1px solid #d9dde4; border-radius: 6px; font: inherit; }
+.email-settings input, .email-settings select { width: 100%; padding: 7px 8px; border: 1px solid #d9dde4; border-radius: 6px; font: inherit; }
 .email-settings .email-auto { display: flex; align-items: center; gap: 7px; font-weight: 400; }
 .email-settings .email-auto input { width: auto; margin: 0; }
 .email-actions { display: flex; gap: 6px; margin-top: 9px; }
