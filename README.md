@@ -1,5 +1,7 @@
 # OpenReview Score Check
 
+**English** | [한국어](README.ko.md)
+
 A small Chrome Manifest V3 extension that monitors review scores and confidence for papers listed on an OpenReview Authors page.
 
 ## Quick start
@@ -8,14 +10,14 @@ A small Chrome Manifest V3 extension that monitors review scores and confidence 
 2. Open your venue's Authors page (for example, `ICLR.cc/2027/Conference/Authors`).
 3. Open `chrome://extensions` and enable **Developer mode**.
 4. Select **Load unpacked** and choose this repository folder.
-5. Open the extension on the Authors page and select **현재 Authors 페이지 논문 추가**.
+5. Open the extension on the Authors page and select **Add papers from the current Authors page** (`현재 Authors 페이지 논문 추가`).
 6. The Authors page can be closed after setup. The extension checks every 15 minutes and sends a Chrome notification when a score or confidence changes.
 
 To track multiple venues (for example ICLR and the October ARR cycle), repeat step 5 on each venue's Authors page. New papers are merged into the existing list by forum ID. Registering the same page again updates existing entries without duplicates or resetting their delivery history. All venues appear in the popup and share the 15-minute checks and selected notification settings.
 
 Chrome must remain running for scheduled checks. If your OpenReview session expires, sign in again and start monitoring from the Authors page.
 
-알림 방식별 설정은 아래 [알림 설정 안내](#알림-설정-안내)를 참고하세요.
+See [Notification setup](#notification-setup) below to choose and configure a delivery method.
 
 ## What it reads
 
@@ -40,84 +42,86 @@ Review form field names vary by venue. The extension recognizes common score fie
 
 This project is not affiliated with OpenReview.
 
-## 알림 설정 안내
+## Notification setup
 
-### 어떤 방식으로 받을 수 있나요?
+The popup currently uses Korean labels. English descriptions below include the exact labels you will see.
 
-| 팝업의 알림 보낼 곳 | 브라우저 알림 | Python 모니터 | 로컬 서비스 토큰 | 추가 설정 |
+### Choose a delivery method
+
+| Popup selection | Browser notifications | Python monitor | Local service token | Additional settings |
 | --- | --- | --- | --- | --- |
-| 브라우저 알림만 | 사용 | 불필요 | 불필요 | 없음 |
-| 이메일 | 사용 | 필요 | 필요 | SMTP 설정, 받는 이메일 주소 |
-| Telegram | 사용 | 필요 | 필요 | Telegram 봇 토큰, Chat ID |
-| 이메일 + Telegram | 사용 | 필요 | 필요 | SMTP와 Telegram 설정 모두 |
+| Browser only (`브라우저 알림만`) | Enabled | Not needed | Not needed | None |
+| Email (`이메일`) | Enabled | Required | Required | SMTP settings and recipient address |
+| Telegram | Enabled | Required | Required | Telegram bot token and chat ID |
+| Email + Telegram (`이메일 + Telegram`) | Enabled | Required | Required | Both SMTP and Telegram settings |
 
-새로 설치하면 **브라우저 알림만**이 기본입니다. 이메일·Telegram 전송이 실패해도 논문 등록, 점수 갱신과 브라우저 알림은 계속됩니다. 브라우저 알림을 받으려면 Chrome이 실행 중이어야 하며, 운영체제에서 Chrome 알림을 허용해야 합니다.
+New installations default to **Browser only**. Email or Telegram delivery failures do not prevent paper registration, score updates or browser notifications. Chrome must remain running, and your operating system must allow Chrome notifications.
 
-### 브라우저 알림만 사용하기
+### Use browser notifications only
 
-1. OpenReview에 로그인하고 원하는 venue의 Authors 페이지를 엽니다.
-2. 확장 팝업에서 **알림 보낼 곳 → 브라우저 알림만 → 알림 설정 저장**을 누릅니다.
-3. **현재 Authors 페이지 논문 추가**를 누릅니다.
-4. 이후 Authors 페이지를 닫아도 Chrome이 실행 중이면 15분마다 확인합니다.
+1. Sign in to OpenReview and open your venue's Authors page.
+2. In the popup, choose **Delivery method → Browser only → Save notification settings** (`알림 보낼 곳 → 브라우저 알림만 → 알림 설정 저장`).
+3. Select **Add papers from the current Authors page** (`현재 Authors 페이지 논문 추가`).
+4. You can close the Authors page afterward. The extension checks every 15 minutes while Chrome is running.
 
-Python 실행, 이메일 주소, SMTP 설정, Telegram 설정, 로컬 서비스 토큰은 필요하지 않습니다. OpenReview 로그인이 만료되면 다시 로그인하세요.
+No Python process, email address, SMTP configuration, Telegram configuration or local service token is needed. Sign in to OpenReview again if your session expires.
 
-### 여러 venue 함께 감시하기
+### Track multiple venues
 
-ICLR Authors 페이지에서 논문을 추가한 뒤, ARR October Authors 페이지에서도 **현재 Authors 페이지 논문 추가**를 누르세요. 기존 venue를 유지하면서 새 논문을 추가합니다. ARR은 원하는 연도와 월의 Authors 페이지를 사용하세요.
+Add papers from the ICLR Authors page, then use **Add papers from the current Authors page** (`현재 Authors 페이지 논문 추가`) on the ARR October Authors page too. The extension adds the new papers while keeping existing venues. For ARR, choose the Authors page for the year and month you want to track.
 
-같은 페이지를 다시 등록해도 forum ID가 같은 논문은 중복되지 않고 발송 기록도 유지됩니다. 등록한 모든 venue를 같은 팝업에서 확인하며, 같은 알림 설정으로 감시합니다.
+Registering the same page again does not duplicate forum IDs or reset delivery history. All registered venues appear in one popup and use the same notification settings.
 
-### Telegram에도 로컬 서비스 토큰이 필요한 이유
+### Why Telegram also needs a local service token
 
-확장 프로그램을 사용할 때의 전송 경로는 다음과 같습니다.
+When using the extension, requests follow this path:
 
 ```text
-Chrome 확장 프로그램 ── EMAIL_BRIDGE_TOKEN ──> 로컬 Python 모니터
-                                                ├─ SMTP 설정 ──> 이메일
-                                                └─ TELEGRAM_BOT_TOKEN + CHAT_ID ──> Telegram
+Chrome extension ── EMAIL_BRIDGE_TOKEN ──> Local Python monitor
+                                           ├─ SMTP settings ──> Email
+                                           └─ TELEGRAM_BOT_TOKEN + CHAT_ID ──> Telegram
 ```
 
-| 설정 | 역할 | 설정하는 곳 |
+| Setting | Purpose | Where to configure it |
 | --- | --- | --- |
-| `EMAIL_BRIDGE_TOKEN` | 확장 프로그램이 로컬 Python 모니터에 요청할 때 인증 | Python 환경 변수와 팝업의 **로컬 알림 서비스 토큰**에 같은 값 입력 |
-| `TELEGRAM_BOT_TOKEN` | Python 모니터가 Telegram 봇으로 메시지를 전송할 때 인증 | Python 환경 변수에만 설정 |
-| `TELEGRAM_CHAT_ID` | Telegram 메시지를 받을 개인 채팅·그룹·채널 지정 | Python 환경 변수에만 설정 |
-| `SMTP_USERNAME`, `SMTP_PASSWORD` 등 | Python 모니터가 메일 서버에 연결할 때 사용 | Python 환경 변수에만 설정 |
+| `EMAIL_BRIDGE_TOKEN` | Authenticates requests from the extension to the local Python monitor | Set the Python environment variable and paste the same value into **Local service token** (`로컬 알림 서비스 토큰`) in the popup |
+| `TELEGRAM_BOT_TOKEN` | Authenticates the Python monitor to Telegram as your bot | Python environment variable only |
+| `TELEGRAM_CHAT_ID` | Selects the destination Telegram chat, group or channel | Python environment variable only |
+| `SMTP_USERNAME`, `SMTP_PASSWORD`, etc. | Connect the Python monitor to your mail server | Python environment variables only |
 
-`EMAIL_BRIDGE_TOKEN`은 기존 설정과의 호환성을 위해 이름을 유지한 **공통 연결 토큰**입니다. Telegram만 사용해도 필요합니다. Telegram 봇 토큰을 팝업의 로컬 서비스 토큰 칸에 넣으면 안 됩니다. 봇 토큰과 SMTP 비밀번호는 확장 프로그램에 저장하지 않습니다.
+`EMAIL_BRIDGE_TOKEN` is a **shared local connection token** whose name is retained for compatibility. Telegram-only delivery through the extension still requires it. Do not paste your Telegram bot token into the popup's local service token field. The extension does not store the bot token or SMTP password.
 
-### 이메일·Telegram 공통 준비
+### Common setup for email and Telegram
 
-프로젝트 폴더에서 Python 3.10 이상 환경을 활성화하고 의존성을 설치합니다. Conda 환경을 만든 경우 다음과 같이 실행할 수 있습니다.
+Activate a Python 3.10 or newer environment in the project directory and install the dependencies. If you already created the Conda environment:
 
 ```sh
 conda activate openreview_checker
 python -m pip install -r requirements.txt
 ```
 
-모니터를 실행할 터미널에서 로컬 서비스 토큰을 생성합니다.
+Generate a local service token in the terminal that will run the monitor:
 
 ```sh
 export EMAIL_BRIDGE_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 printf '%s\n' "$EMAIL_BRIDGE_TOKEN"
 ```
 
-출력된 값을 팝업의 **로컬 알림 서비스 토큰**에 입력할 수 있도록 보관하세요. 직접 정한다면 32자 이상이어야 합니다. 토큰을 새로 생성하면 팝업에도 새 값을 저장해야 합니다.
+Keep the printed value for the popup's **Local service token** (`로컬 알림 서비스 토큰`) field. A token you choose yourself must contain at least 32 characters. If you generate a new token, save the new value in the popup too.
 
-아래에서 사용할 방식의 환경 변수를 **같은 터미널에** 설정한 다음 `python monitor.py`를 실행하세요. 환경 변수는 실행 중인 프로세스에 자동 반영되지 않으므로, 설정을 바꾸면 모니터를 재시작해야 합니다. `export`는 현재 터미널 세션에만 적용되며 새 터미널에서는 다시 설정해야 합니다. 모니터는 프로젝트 폴더에서 실행하세요.
+Set the delivery-specific variables below in the **same terminal**, then run `python monitor.py`. Restart the monitor after changing environment variables; an already running process does not receive the new values. Terminal exports apply only to the current shell session and must be set again in a new terminal. Run the monitor from the project directory.
 
-### Telegram 사용하기
+### Use Telegram
 
-1. Telegram의 [@BotFather](https://t.me/BotFather)에서 봇을 만들고 봇 토큰을 발급받습니다.
-2. 만든 봇과의 채팅을 열고 `/start`를 보냅니다. 그룹을 사용한다면 봇을 추가하고 메시지를 보낼 수 있도록 권한을 설정합니다.
-3. 공통 준비를 마친 터미널에서 봇 토큰을 설정합니다.
+1. Create a bot with [@BotFather](https://t.me/BotFather) and obtain its bot token.
+2. Open a chat with the new bot and send `/start`. For a group, add the bot and give it permission to send messages.
+3. Set the bot token in the terminal where you completed the common setup:
 
 ```sh
-export TELEGRAM_BOT_TOKEN='발급받은-봇-토큰'
+export TELEGRAM_BOT_TOKEN='your-bot-token'
 ```
 
-Chat ID는 Telegram Bot API의 [getUpdates](https://core.telegram.org/bots/api#getupdates) 응답에서 확인합니다. 봇에 메시지를 보낸 뒤 다음 명령으로 수신한 메시지의 Chat ID만 출력할 수 있습니다.
+Find the destination chat ID in the Telegram Bot API's [getUpdates](https://core.telegram.org/bots/api#getupdates) response. After sending your bot a message, this command prints only chat IDs from received messages:
 
 ```sh
 python - <<'PYTHON'
@@ -136,89 +140,89 @@ for update in updates.get("result", []):
 PYTHON
 ```
 
-출력이 없으면 봇에 새 메시지를 보내고 다시 확인하세요. 이 명령은 해당 봇의 수신 업데이트를 조회하므로 다른 앱에서 이미 사용 중인 봇보다는 이 알림용으로 만든 봇을 사용하면 설정하기 쉽습니다.
+If nothing is printed, send a new message to the bot and try again. The command reads that bot's incoming updates, so a bot dedicated to these notifications is easier to configure than one already used by another application.
 
 ```sh
-export TELEGRAM_CHAT_ID='확인한-Chat-ID'
+export TELEGRAM_CHAT_ID='your-chat-id'
 python monitor.py
 ```
 
-모니터가 실행되면 팝업에서 **Telegram**을 선택하고, 공통 준비에서 만든 **로컬 알림 서비스 토큰**을 입력한 뒤 **알림 설정 저장**을 누릅니다. **현재 리뷰 알림 보내기**로 수동 전송할 수 있습니다. 자동 전송도 원하면 **새 리뷰나 점수가 바뀌면 추가 알림 보내기**를 켜고 저장하세요.
+With the monitor running, select **Telegram** in the popup, enter the **Local service token** (`로컬 알림 서비스 토큰`) from the common setup, then select **Save notification settings** (`알림 설정 저장`). Use **Send current review notifications** (`현재 리뷰 알림 보내기`) for a manual send. To enable automatic sends, check **Send additional notifications when new reviews or scores change** (`새 리뷰나 점수가 바뀌면 추가 알림 보내기`) and save.
 
-Telegram만 선택하면 SMTP 설정과 받는 이메일 주소는 필요하지 않습니다.
+Telegram-only delivery requires no SMTP settings or recipient email address.
 
-### 이메일 사용하기
+### Use email
 
-공통 준비를 마친 터미널에서 메일 서버 정보를 설정합니다. 아래는 Gmail SMTP 설정 예시입니다. `SMTP_PASSWORD`에는 메일 제공업체에서 발급한 앱 비밀번호 등 SMTP 인증 정보를 사용하세요.
+Set your mail server details in the terminal where you completed the common setup. This example uses Gmail SMTP. Use an app password or another SMTP credential issued by your mail provider for `SMTP_PASSWORD`.
 
 ```sh
 export SMTP_HOST='smtp.gmail.com'
 export SMTP_PORT='587'
 export SMTP_USERNAME='you@gmail.com'
-export SMTP_PASSWORD='메일-제공업체의-앱-비밀번호'
+export SMTP_PASSWORD='your-mail-provider-app-password'
 export EMAIL_FROM='you@gmail.com'
 python monitor.py
 ```
 
-`SMTP_PORT`의 기본값은 `587`이며 STARTTLS를 사용합니다. 팝업에서 **이메일**을 선택하고 **받는 이메일 주소**, **로컬 알림 서비스 토큰**을 입력한 뒤 **알림 설정 저장**을 누르세요. 수동 전송과 자동 전송 방법은 Telegram과 같습니다. 이메일만 선택하면 Telegram 설정은 필요하지 않습니다.
+`SMTP_PORT` defaults to `587`, using STARTTLS. In the popup, choose **Email** (`이메일`), enter the **Recipient email address** (`받는 이메일 주소`) and **Local service token** (`로컬 알림 서비스 토큰`), then save. Manual and automatic sends work as described for Telegram. Email-only delivery requires no Telegram settings.
 
-### 이메일과 Telegram 둘 다 사용하기
+### Use both email and Telegram
 
-같은 터미널에 `EMAIL_BRIDGE_TOKEN`, SMTP 설정, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`를 모두 설정하고 `python monitor.py`를 실행합니다. 팝업에서는 **이메일 + Telegram**을 선택하고 받는 이메일 주소와 로컬 서비스 토큰을 저장하세요.
+Set `EMAIL_BRIDGE_TOKEN`, the SMTP variables, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in the same terminal, then run `python monitor.py`. In the popup, select **Email + Telegram** (`이메일 + Telegram`) and save the recipient address and local service token.
 
-한쪽 전송만 실패하면 자동 확인 때 실패한 쪽만 재시도합니다. 수동 전송은 매번 다시 보내므로, 일부 성공 안내가 나온 뒤 수동으로 재전송하면 성공했던 쪽에도 중복 발송될 수 있습니다.
+If only one channel fails, automatic checks retry the failed channel. Manual sends always send again; retrying manually after a partial success can duplicate delivery through the channel that already succeeded.
 
-### 알림 내용과 실행 상태
+### Notification contents and runtime status
 
-이메일·Telegram에는 전체 논문의 **score / confidence를 먼저 모아서** 보내고, 뒤에 논문과 리뷰별 OpenReview 원문 링크를 붙입니다. 긴 리뷰 본문은 전송하지 않으며 weakness 전체도 원문에서 확인할 수 있습니다. 비공개 리뷰는 링크를 열 때 권한이 있는 OpenReview 계정으로 로그인해야 합니다. 리뷰 번호는 note ID 순서로 정하므로 점수가 바뀌어도 순서가 바뀌지 않습니다.
+Email and Telegram messages collect **scores and confidence for all papers first**, followed by links to each paper and original OpenReview review. They omit long review bodies; the original links include the full weaknesses. Private reviews require an OpenReview account with access. Reviews are numbered by note ID, so score changes do not reorder them.
 
-확장 프로그램이 OpenReview를 조회하고 Python이 전달만 하는 모드에서는 Chrome과 Python이 모두 실행 중이어야 합니다. 로컬 서비스는 같은 컴퓨터의 `127.0.0.1:8765`에서만 연결을 받습니다. Chrome에서 로컬 네트워크 접근 허용을 요청하면 허용하세요.
+When Chrome fetches reviews and Python only forwards notifications, both Chrome and Python must remain running. The local service accepts connections only on `127.0.0.1:8765` on the same computer. Allow Chrome's local network permission if prompted.
 
-다음 메시지는 오류가 아닙니다.
+This message is normal:
 
 ```text
 Background OpenReview polling is not configured; the extension notification bridge is active.
 ```
 
-Python 자체 감시를 설정하지 않았고, 확장 프로그램이 보내는 요청을 기다리는 정상 상태입니다. 이 방식에서는 `OPENREVIEW_USERNAME`, `OPENREVIEW_PASSWORD`, `OPENREVIEW_PAPERS_JSON`을 설정할 필요가 없습니다.
+It means independent Python polling is not configured and the monitor is waiting for extension requests. This mode does not require `OPENREVIEW_USERNAME`, `OPENREVIEW_PASSWORD` or `OPENREVIEW_PAPERS_JSON`.
 
-코드를 업데이트한 뒤에는 `chrome://extensions`에서 확장 프로그램을 새로고침하고, 이메일·Telegram을 사용한다면 실행 중인 `monitor.py`도 재시작하세요.
+After updating the code, reload the extension at `chrome://extensions`. Restart `monitor.py` too if you use email or Telegram.
 
-### Chrome 없이 Python이 직접 감시하게 하기 — 선택 사항
+### Optional Python polling without Chrome
 
-이 모드의 흐름은 `Python → OpenReview 조회 → 이메일 / Telegram`입니다. Chrome이 리뷰를 가져오는 위의 방식과 다르게 OpenReview 로그인 정보를 Python에도 설정해야 합니다.
+This mode follows `Python → OpenReview checks → Email / Telegram`. Unlike extension-driven checks, it requires OpenReview login credentials in the Python environment.
 
-| 환경 변수 | 용도 |
+| Environment variable | Purpose |
 | --- | --- |
-| `OPENREVIEW_USERNAME`, `OPENREVIEW_PASSWORD` | Python의 OpenReview 로그인 |
-| `OPENREVIEW_PAPERS_JSON` | 논문별 `venue`, `title`, `forum`을 담은 JSON 배열. `papers.example.json` 참고. 여러 venue를 한 배열에 넣을 수 있음 |
-| `OPENREVIEW_TOTP_SECRET` | 무인 로그인에 인증 앱 MFA가 필요한 경우에만 설정 |
-| `NOTIFICATION_CHANNEL` | `email`(기본값), `telegram`, `both`. `browser`는 Python의 외부 전송을 끔 |
-| `EMAIL_TO` | 이메일 수신 주소. 확장 프로그램에서 저장한 주소가 있으면 저장된 주소가 우선 |
-| `POLL_INTERVAL_SECONDS` | 확인 간격. 기본 900초, 최소 60초 |
+| `OPENREVIEW_USERNAME`, `OPENREVIEW_PASSWORD` | OpenReview login for Python |
+| `OPENREVIEW_PAPERS_JSON` | A JSON array of papers with `venue`, `title` and `forum`; see `papers.example.json`. Multiple venues can share the same array |
+| `OPENREVIEW_TOTP_SECRET` | Needed only when unattended login requires authenticator-app MFA |
+| `NOTIFICATION_CHANNEL` | `email` (default), `telegram` or `both`; `browser` disables Python's external delivery |
+| `EMAIL_TO` | Email recipient; an address saved through the extension takes precedence |
+| `POLL_INTERVAL_SECONDS` | Check interval: default 900 seconds, minimum 60 seconds |
 
-사용할 SMTP·Telegram 환경 변수도 설정해야 합니다. Python 자체 감시만 실행하면 `EMAIL_BRIDGE_TOKEN`은 필요하지 않습니다. 이 토큰은 확장 프로그램의 설정 저장·전송 기능도 연결할 때 필요합니다.
+Set the SMTP or Telegram variables for your chosen delivery method too. Independent Python polling alone does not require `EMAIL_BRIDGE_TOKEN`. That token is needed when you also connect the extension's settings and send actions.
 
-예를 들어 `export NOTIFICATION_CHANNEL=telegram`은 Python 자체 감시의 Telegram 전송을 선택합니다. 다만 확장 프로그램에서 알림 방식을 저장했다면 `.state/email-settings.json`에 저장된 설정이 `NOTIFICATION_CHANNEL`보다 우선합니다. 실행하면 즉시 확인하고 이후 설정한 간격으로 반복합니다.
+For example, `export NOTIFICATION_CHANNEL=telegram` selects Telegram for Python polling. If notification settings have been saved through the extension, the settings in `.state/email-settings.json` take precedence over `NOTIFICATION_CHANNEL`. Python checks immediately on startup, then at the configured interval.
 
-확장 프로그램의 자동 알림 체크박스는 Chrome의 자동 전송만 제어합니다. Python은 `OPENREVIEW_PAPERS_JSON`이 설정되어 있으면 자체 감시를 실행하므로, 중복 발송을 피하려면 **확장 자동 전송 또는 Python 자체 감시 중 하나**를 사용하세요. 확장 전달 전용으로 실행하려면 모니터를 중지한 다음 같은 터미널에서 `unset OPENREVIEW_PAPERS_JSON` 후 재시작합니다.
+The extension's automatic notification checkbox controls only Chrome's sends. Python polls whenever `OPENREVIEW_PAPERS_JSON` is configured. To prevent duplicate messages, enable **either extension automatic sends or independent Python polling**. To run only the extension bridge, stop the monitor, run `unset OPENREVIEW_PAPERS_JSON` in the same terminal, then restart it.
 
-브라우저 알림만 선택하면 실행 중인 로컬 서비스에 설정을 동기화하려고 시도하지만, 연결되지 않아도 브라우저 설정 저장은 완료됩니다. 이때 Python에는 이전 설정이 남을 수 있으므로 브라우저 알림만 사용할 때는 Python 자체 감시를 중지하세요. Python만으로는 Chrome 알림을 만들지 않습니다.
+Selecting browser-only attempts to sync the choice to a running local service, but saving browser settings completes even if the service cannot be reached. Python may retain its previous settings in that case, so stop independent Python polling when using only browser notifications. Python alone cannot create Chrome notifications.
 
-### 문제 해결과 설정 보관
+### Troubleshooting and stored settings
 
-| 증상 | 확인할 내용 |
+| Symptom | What to check |
 | --- | --- |
-| `Missing environment variable: ...` | 모니터를 실행한 터미널에 해당 변수를 설정했는지 확인하고 재시작 |
-| 로컬 알림 서비스 연결 실패 | `monitor.py` 실행 여부, 같은 컴퓨터인지, Chrome 로컬 네트워크 권한 확인 |
-| `Bridge token is invalid` | 팝업의 로컬 서비스 토큰과 모니터의 `EMAIL_BRIDGE_TOKEN`이 같은지 확인 |
-| Telegram API 오류 | 봇 토큰, Chat ID, 봇과의 대화 시작 여부, 대상 채팅에서의 발송 권한 확인 |
-| 브라우저 알림이 안 보임 | Chrome 실행 여부와 운영체제의 Chrome 알림 허용 여부 확인 |
-| 알림이 두 번 옴 | Python 자체 감시와 확장 자동 전송을 동시에 켰는지 확인 |
+| `Missing environment variable: ...` | Set the variable in the terminal running the monitor, then restart it |
+| Cannot connect to the local notification service | Check that `monitor.py` is running on the same computer and Chrome has local network permission |
+| `Bridge token is invalid` | The popup's local service token must match the monitor's `EMAIL_BRIDGE_TOKEN` |
+| Telegram API error | Check the bot token, chat ID, whether you started a chat with the bot, and its permission to send to the destination |
+| Browser notifications do not appear | Check that Chrome is running and operating system notifications are enabled for Chrome |
+| Duplicate notifications | Check whether both independent Python polling and extension automatic sends are enabled |
 
-발송 내역의 fingerprint는 `.state/last-seen.json`에 채널별로 저장합니다. 원문 변경도 감지하며, 같은 내용은 자동으로 다시 보내지 않습니다. Telegram 메시지가 길면 [sendMessage 길이 제한](https://core.telegram.org/bots/api#sendmessage)에 맞춰 나눠 보냅니다. 여러 조각 중간에 전송이 실패하면 재시도 시 앞선 조각이 중복될 수 있습니다.
+Python stores delivery fingerprints per channel in `.state/last-seen.json`. Review text changes are also detected, and unchanged content is not automatically sent again. Long Telegram messages are split to fit the [sendMessage limit](https://core.telegram.org/bots/api#sendmessage). If a batch fails partway through, earlier chunks may be repeated on retry.
 
-인증 정보나 `.state/` 파일을 저장소에 커밋하지 마세요. 확장 프로그램에는 로컬 연결 토큰, 받는 주소, 알림 방식과 자동 전송 여부를 저장하며, SMTP 인증 정보와 Telegram 봇 토큰은 Python 환경 변수에서만 읽습니다. 메일 제공업체나 Telegram에는 제목·venue·score·confidence·원문 링크가 전달됩니다. 이 알림 기능은 AI 서비스를 호출하지 않습니다.
+Do not commit credentials or `.state/` files. The extension stores the local connection token, recipient address, delivery method and automatic-send preference. SMTP credentials and the Telegram bot token are read only from Python environment variables. Your mail provider or Telegram receives paper titles, venues, scores, confidence and original-review links. This notification feature does not call an AI service.
 
 ## Local extension and ChatGPT web handoff
 
