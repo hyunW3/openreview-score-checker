@@ -72,6 +72,12 @@ Add papers from the ICLR Authors page, then use **Add papers from the current Au
 
 Registering the same page again does not duplicate forum IDs or reset delivery history. All registered venues appear in one popup and use the same notification settings.
 
+### Remove a monitored paper
+
+Select **Delete** (`삭제`) in the paper's row in the popup. The paper and its extension delivery history are removed immediately; the other papers and venues remain monitored. Removing the last paper stops the extension's scheduled checks. A check already in progress cannot restore a removed paper to the list, but a notification request already sent cannot be recalled.
+
+To add it again, register its Authors page again; this adds all papers visible on that page, including ones previously removed. If independent Python polling is enabled, also remove the paper from `OPENREVIEW_PAPERS_JSON` and restart `monitor.py`; that configuration is separate from the extension's list.
+
 ### Why Telegram also needs a local service token
 
 When using the extension, requests follow this path:
