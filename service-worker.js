@@ -99,7 +99,17 @@ let paperUpdateQueue = Promise.resolve();
 function updatePapers(update, extra = {}) {
   const task = paperUpdateQueue.then(async () => {
     const { papers = [] } = await chrome.storage.local.get(["papers"]);
-    await chrome.storage.local.set({ papers: update(papers), ...extra });
+    const next = update(papers);
+    const changes = typeof extra === "function" ? extra(next) : extra;
+    await chrome.storage.local.set({
+      papers: next, ...changes,
+      ...(!next.length ? { error: "", lastChecked: null, baselineAt: null } : {})
+    });
+    if (next.length) {
+      await chrome.alarms.create(ALARM_NAME, { periodInMinutes: INTERVAL_MINUTES });
+    } else {
+      await chrome.alarms.clear(ALARM_NAME);
+    }
   });
   paperUpdateQueue = task.catch(() => {});
   return task;
@@ -114,6 +124,11 @@ function persistPaperResults(results, extra) {
 
 async function stateNow() {
   return chrome.storage.local.get(["papers", "error", "lastChecked", "aiPrompt", "aiConsent"]);
+}
+
+async function isPaperMonitored(forum) {
+  const { papers = [] } = await chrome.storage.local.get(["papers"]);
+  return papers.some(paper => paper.forum === forum);
 }
 
 async function emailBridgeRequest(path, token, body) {
@@ -151,7 +166,9 @@ async function pollAll({ notify = true, baseline = false } = {}) {
   const next = [];
   for (const oldPaper of previous) {
     try {
+      if (!(await isPaperMonitored(oldPaper.forum))) continue;
       const current = await getPaperReviews(oldPaper);
+      if (!(await isPaperMonitored(oldPaper.forum))) continue;
       const hasScore = Boolean(current.scores || current.confidences);
       const changed = oldPaper.signature ? oldPaper.signature !== current.signature : hasScore;
       let paperError = "";
@@ -175,6 +192,7 @@ async function pollAll({ notify = true, baseline = false } = {}) {
         const targets = channel === "both" ? ["email", "telegram"] : [channel];
         const notificationSignatures = { ...oldPaper.notificationSignatures };
         for (const target of targets) {
+          if (!(await isPaperMonitored(oldPaper.forum))) break;
           if (notificationSignatures[target] === current.signature) continue;
           try {
             if (!stored.emailBridgeToken?.trim()) throw new Error("로컬 알림 서비스 토큰을 설정하고 저장하세요.");
@@ -209,8 +227,8 @@ async function pollAll({ notify = true, baseline = false } = {}) {
   const lastChecked = Date.now();
   const error = firstError || "";
   await persistPaperResults(next, { lastChecked, error, ...(baseline ? { baselineAt: lastChecked } : {}) });
-  await chrome.alarms.create(ALARM_NAME, { periodInMinutes: INTERVAL_MINUTES });
-  return { ok: !error, error, state: await stateNow() };
+  const state = await stateNow();
+  return { ok: !state.error, error: state.error || "", state };
 }
 
 async function sendCurrentReviewsToChatGPT() {
@@ -225,6 +243,7 @@ async function sendCurrentReviewsToChatGPT() {
   for (const paper of papers) {
     try {
       const current = await getPaperReviews(paper);
+      if (!(await isPaperMonitored(paper.forum))) continue;
       if (current.reviews.length && (current.scores || current.confidences)) {
         await openChatGPTTab(buildPrompt(stored, current, current.reviews), current.title);
         sent++;
@@ -252,6 +271,7 @@ async function sendCurrentReviewsToEmail() {
   const emailPapers = [];
   for (const paper of papers) {
     const current = await getPaperReviews(paper);
+    if (!(await isPaperMonitored(paper.forum))) continue;
     if (!current.reviews.some((review) => review.score)) continue;
     emailPapers.push({
       title: current.title,
@@ -324,7 +344,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const fromExtensionPage = sender.url?.startsWith(chrome.runtime.getURL(""));
-  if (["GET_EMAIL_SETTINGS", "STORE_EMAIL_SETTINGS", "SEND_EMAIL_NOW"].includes(message.type) && !fromExtensionPage) {
+  if (["GET_EMAIL_SETTINGS", "STORE_EMAIL_SETTINGS", "SEND_EMAIL_NOW", "REMOVE_PAPER"].includes(message.type) && !fromExtensionPage) {
     return false;
   }
   if (message.type === "GET_STATE") {
@@ -360,6 +380,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     );
     return true;
   }
+  if (message.type === "REMOVE_PAPER") {
+    (async () => {
+      if (typeof message.forum !== "string" || !message.forum.trim()) throw new Error("삭제할 논문의 forum ID가 필요합니다.");
+      await updatePapers(
+        papers => papers.filter(paper => paper.forum !== message.forum),
+        papers => ({ error: papers.map(paper => paper.error).filter(Boolean).join("\n") })
+      );
+      sendResponse({ ok: true, state: await stateNow() });
+    })().catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
   if (message.type === "SET_PAPERS") {
     (async () => {
       if (!Array.isArray(message.papers) || !message.papers.length) throw new Error("등록할 논문이 없습니다.");
@@ -377,7 +408,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         return [...byForum.values()];
       }, { error: "" });
-      await chrome.alarms.create(ALARM_NAME, { periodInMinutes: INTERVAL_MINUTES });
       sendResponse({ ok: true, state: await stateNow() });
       // Registration is complete; notification delivery cannot block its response.
       await pollAll({ notify: true, baseline: true }).catch((error) => chrome.storage.local.set({ error: error.message }));

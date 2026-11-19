@@ -24,11 +24,33 @@ function render(state = {}) {
   for (const paper of papers) {
     const row = document.createElement("tr");
     row.append(cell(paper.venue), cell(paper.title), cell(paper.scores), cell(paper.confidences));
+    const actions = document.createElement("td");
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "remove-paper";
+    remove.textContent = "삭제";
+    remove.setAttribute("aria-label", `${paper.title} 감시 목록에서 삭제`);
+    remove.addEventListener("click", () => removePaper(paper, remove));
+    actions.append(remove);
+    row.append(actions);
     tableBody.append(row);
   }
   if (state.error) showStatus(papers.length ? `감시 중 · ${papers.length}편 · ${state.error}` : state.error, true);
   else if (papers.length) showStatus(`감시 중 · ${venues.length}개 venue · ${papers.length}편 · 15분마다 자동 확인`);
   else showStatus("Authors 페이지에서 한 번 감시를 시작하세요.");
+}
+
+async function removePaper(paper, button) {
+  button.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "REMOVE_PAPER", forum: paper.forum });
+    if (!result?.ok) throw new Error(result?.error || "논문을 삭제하지 못했습니다.");
+    render(result.state);
+    showStatus(`감시 목록에서 삭제했습니다: ${paper.title}`);
+  } catch (error) {
+    button.disabled = false;
+    showStatus(error.message, true);
+  }
 }
 
 async function getState() {

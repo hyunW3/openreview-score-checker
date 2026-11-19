@@ -33,6 +33,9 @@ th { position: sticky; top: 0; background: #f8f9fb; font-weight: 600; color: #50
 td:first-child { white-space: nowrap; color: #505867; }
 td:nth-child(2) { min-width: 260px; }
 tr:last-child td { border-bottom: 0; }
+.remove-paper { width: auto; height: auto; padding: 5px 8px; font-size: 12px; color: #a33b32; white-space: nowrap; }
+.remove-paper:hover { background: #fff1f0; border-color: #a33b32; }
+.remove-paper:disabled { opacity: 0.5; cursor: wait; }
 .score-list { display: flex; flex-wrap: wrap; gap: 4px; }
 .pill { display: inline-block; border-radius: 999px; background: #f0f3f8; padding: 2px 7px; white-space: nowrap; }
 .empty { color: #9aa1ad; }
